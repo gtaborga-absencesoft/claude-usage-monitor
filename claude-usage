@@ -3,6 +3,10 @@
 Claude Usage Monitor - Terminal monitoring tool for Claude usage limits
 Matches the actual claude.ai/settings/usage interface
 Supports both manual and automatic extraction
+
+Dependencies:
+  pip install playwright rich
+  playwright install firefox
 """
 
 import os
@@ -12,6 +16,9 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
+from rich.live import Live
+from rich.console import Console
+from rich.text import Text
 
 # ANSI color codes
 BLUE = '\033[94m'
@@ -384,34 +391,28 @@ def extract_usage_auto(browser='firefox', headless=False, progress_callback=None
         print(f"  {BOLD}claude-usage manual{RESET}\n")
         return False
 
-def show_countdown(seconds):
-    """Display a countdown timer with spinner
+def generate_countdown_text(remaining, spinner_idx):
+    """Generate countdown text with spinner
 
     Args:
-        seconds: Number of seconds to count down from
+        remaining: Seconds remaining
+        spinner_idx: Current spinner index
+
+    Returns:
+        str: Formatted countdown text
     """
     spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-    spinner_idx = 0
+    spinner = spinners[spinner_idx % len(spinners)]
 
-    try:
-        for remaining in range(seconds, 0, -1):
-            minutes = remaining // 60
-            secs = remaining % 60
-            spinner = spinners[spinner_idx % len(spinners)]
+    minutes = remaining // 60
+    secs = remaining % 60
 
-            if minutes > 0:
-                time_str = f"{minutes}m {secs}s"
-            else:
-                time_str = f"{secs}s"
+    if minutes > 0:
+        time_str = f"{minutes}m {secs}s"
+    else:
+        time_str = f"{secs}s"
 
-            print(f"\r{DIM}Next update in: {time_str} {spinner}{RESET}", end='', flush=True)
-            spinner_idx += 1
-            time.sleep(1)
-
-        print(f"\r{DIM}Updating usage...{RESET}" + " " * 30)  # Clear the line
-    except KeyboardInterrupt:
-        print("\n")  # Move to next line on Ctrl+C
-        raise
+    return f"{DIM}Next update in: {time_str} {spinner}{RESET}"
 
 def auto_refresh_mode(browser='firefox', interval=300):
     """Run auto-refresh mode with continuous updates
@@ -423,84 +424,91 @@ def auto_refresh_mode(browser='firefox', interval=300):
     print(f"\n{BOLD}{CYAN}Auto-Refresh Mode{RESET}")
     print(f"{DIM}Monitoring usage every {interval // 60} minutes. Press Ctrl+C to stop.{RESET}\n")
 
+    console = Console()
+
     progress_messages = []
 
     def progress_callback(message):
-        """Collect progress messages to display"""
+        """Collect progress messages without displaying"""
         progress_messages.append(message)
-        print(message)
 
     try:
-        while True:
-            # Display current usage
-            display_usage(clear_screen=True)
+        with Live(console=console, refresh_per_second=10) as live:
+            while True:
+                # Generate display content
+                display_content = display_usage()
+                display_content += f"\n{CYAN}─────────────────────────────────────────────────────────────────{RESET}\n"
+                display_content += f"{DIM}Auto-refresh: Enabled (every {interval // 60} minutes) | Press Ctrl+C to stop{RESET}\n"
 
-            # Show auto-refresh info
-            print(f"{CYAN}─────────────────────────────────────────────────────────────────{RESET}")
-            print(f"{DIM}Auto-refresh: Enabled (every {interval // 60} minutes) | Press Ctrl+C to stop{RESET}")
+                # Countdown loop
+                spinner_idx = 0
+                try:
+                    for remaining in range(interval, 0, -1):
+                        countdown_text = generate_countdown_text(remaining, spinner_idx)
+                        full_display = display_content + "\n" + countdown_text
+                        # Use Text.from_ansi to convert ANSI codes to Rich format
+                        rich_text = Text.from_ansi(full_display)
+                        live.update(rich_text)
+                        spinner_idx += 1
+                        time.sleep(1)
+                except KeyboardInterrupt:
+                    raise
 
-            # Show countdown
-            try:
-                show_countdown(interval)
-            except KeyboardInterrupt:
-                # User pressed Ctrl+C during countdown
-                raise
+                # Show updating message
+                update_msg = display_content + f"\n{DIM}Updating usage...{RESET}"
+                live.update(Text.from_ansi(update_msg))
 
-            # Clear progress messages for next run
-            progress_messages.clear()
+                # Clear progress messages for next run
+                progress_messages.clear()
 
-            # Run headless extraction with progress
-            print()  # New line after countdown
-            try:
-                success = extract_usage_auto(browser, headless=True, progress_callback=progress_callback)
-            except KeyboardInterrupt:
-                # User pressed Ctrl+C during extraction
-                raise
+                # Run headless extraction
+                try:
+                    success = extract_usage_auto(browser, headless=True, progress_callback=progress_callback)
+                except KeyboardInterrupt:
+                    raise
 
-            if not success:
-                print(f"{YELLOW}Failed to update usage. Retrying in {interval // 60} minutes...{RESET}")
+                if not success:
+                    fail_msg = display_content + f"\n{YELLOW}Failed to update usage. Retrying in {interval // 60} minutes...{RESET}"
+                    live.update(Text.from_ansi(fail_msg))
 
-            # Small pause before redisplaying
-            time.sleep(2)
+                # Small pause before redisplaying
+                time.sleep(2)
 
     except KeyboardInterrupt:
         print(f"\n\n{YELLOW}Auto-refresh stopped.{RESET}")
         print(f"Run {BOLD}claude-usage view{RESET} to view your current usage.\n")
 
-def display_usage(clear_screen=True):
-    """Display usage information in terminal
+def display_usage():
+    """Generate usage information display string
 
-    Args:
-        clear_screen: Whether to clear the screen before displaying (default: True)
+    Returns:
+        str: Formatted usage display
     """
     config = load_config()
-
-    # Clear screen if requested
-    if clear_screen:
-        print("\033[2J\033[H", end='')
+    lines = []
 
     # Header
-    print(f"\n{BOLD}{CYAN}╔═══════════════════════════════════════════════════════════════╗{RESET}")
-    print(f"{BOLD}{CYAN}║                 Claude Usage Monitor                          ║{RESET}")
-    print(f"{BOLD}{CYAN}╚═══════════════════════════════════════════════════════════════╝{RESET}\n")
+    lines.append(f"\n{BOLD}{CYAN}╔═══════════════════════════════════════════════════════════════╗{RESET}")
+    lines.append(f"{BOLD}{CYAN}║                 Claude Usage Monitor                          ║{RESET}")
+    lines.append(f"{BOLD}{CYAN}╚═══════════════════════════════════════════════════════════════╝{RESET}\n")
 
     if not config:
-        print(f"{YELLOW}No usage data configured yet.{RESET}")
-        print(f"\nRun {BOLD}claude-usage auto{RESET} for automatic extraction")
-        print(f"Or  {BOLD}claude-usage manual{RESET} for manual entry\n")
-        print(f"{DIM}Visit https://claude.ai/settings/usage to see your actual usage{RESET}\n")
-        return
+        lines.append(f"{YELLOW}No usage data configured yet.{RESET}")
+        lines.append(f"\nRun {BOLD}claude-usage auto{RESET} for automatic extraction")
+        lines.append(f"Or  {BOLD}claude-usage manual{RESET} for manual entry\n")
+        lines.append(f"{DIM}Visit https://claude.ai/settings/usage to see your actual usage{RESET}\n")
+        return '\n'.join(lines)
 
     # Display timestamp
     last_update = config.get('last_updated', 'Never')
     extraction_method = config.get('extraction_method', 'manual')
     if last_update != 'Never':
         last_update = datetime.fromisoformat(last_update).strftime('%Y-%m-%d %H:%M:%S')
-    print(f"{DIM}Last updated: {last_update} ({extraction_method}){RESET}\n")
+    lines.append(f"{DIM}Last updated: {last_update} ({extraction_method}){RESET}\n")
 
     # Plan information
     plan = config.get('plan', 'Unknown')
-    print(f"{BOLD}Plan:{RESET} {MAGENTA}{plan}{RESET}\n")
+    lines.append(f"{BOLD}Plan:{RESET} {MAGENTA}{plan}{RESET}\n")
 
     # Current session
     if 'current_session' in config:
@@ -508,12 +516,12 @@ def display_usage(clear_screen=True):
         percent = session.get('used_percent', 0)
         reset_time = session.get('reset_time', 'Unknown')
 
-        print(f"{BOLD}Current Session:{RESET}")
-        print(f"  {create_progress_bar(percent)}")
+        lines.append(f"{BOLD}Current Session:{RESET}")
+        lines.append(f"  {create_progress_bar(percent)}")
         if reset_time != 'Unknown':
-            print(f"  {DIM}Resets in: {reset_time}{RESET}\n")
+            lines.append(f"  {DIM}Resets in: {reset_time}{RESET}\n")
         else:
-            print()
+            lines.append("")
 
     # Weekly limits - All models
     if 'weekly_all_models' in config:
@@ -521,12 +529,12 @@ def display_usage(clear_screen=True):
         percent = weekly.get('used_percent', 0)
         reset_time = weekly.get('reset_time', 'Unknown')
 
-        print(f"{BOLD}Weekly Limits (All Models):{RESET}")
-        print(f"  {create_progress_bar(percent)}")
+        lines.append(f"{BOLD}Weekly Limits (All Models):{RESET}")
+        lines.append(f"  {create_progress_bar(percent)}")
         if reset_time != 'Unknown':
-            print(f"  {DIM}Resets in: {reset_time}{RESET}\n")
+            lines.append(f"  {DIM}Resets in: {reset_time}{RESET}\n")
         else:
-            print()
+            lines.append("")
 
     # Weekly limits - Opus only
     if 'weekly_opus' in config:
@@ -534,21 +542,23 @@ def display_usage(clear_screen=True):
         percent = opus.get('used_percent', 0)
         reset_time = opus.get('reset_time', 'Unknown')
 
-        print(f"{BOLD}Weekly Limits (Opus Only):{RESET}")
-        print(f"  {create_progress_bar(percent)}")
+        lines.append(f"{BOLD}Weekly Limits (Opus Only):{RESET}")
+        lines.append(f"  {create_progress_bar(percent)}")
         if reset_time != 'Unknown':
-            print(f"  {DIM}Resets in: {reset_time}{RESET}\n")
+            lines.append(f"  {DIM}Resets in: {reset_time}{RESET}\n")
         else:
-            print()
+            lines.append("")
 
     # Additional notes
     if 'notes' in config:
-        print(f"{BOLD}Notes:{RESET}")
-        print(f"  {config['notes']}\n")
+        lines.append(f"{BOLD}Notes:{RESET}")
+        lines.append(f"  {config['notes']}\n")
 
-    print(f"{CYAN}─────────────────────────────────────────────────────────────────{RESET}")
-    print(f"\n{DIM}Monitor: claude-usage (continuous) | Once: claude-usage --once | Manual: claude-usage manual{RESET}")
-    print(f"{DIM}Help: claude-usage --help{RESET}\n")
+    lines.append(f"{CYAN}─────────────────────────────────────────────────────────────────{RESET}")
+    lines.append(f"\n{DIM}Monitor: claude-usage (continuous) | Once: claude-usage --once | Manual: claude-usage manual{RESET}")
+    lines.append(f"{DIM}Help: claude-usage --help{RESET}\n")
+
+    return '\n'.join(lines)
 
 def manual_entry():
     """Interactive manual entry of usage information"""
@@ -627,8 +637,8 @@ def show_help():
   {FIREFOX_PROFILE_DIR}
 
 {BOLD}GETTING STARTED:{RESET}
-  # 1. Install Playwright and Firefox
-  pip install playwright
+  # 1. Install dependencies
+  pip install playwright rich
   playwright install firefox
 
   # 2. Set up Firefox (one-time login)
@@ -698,7 +708,7 @@ if __name__ == "__main__":
                 setup_firefox()
             elif cmd == 'view':
                 # Display only, no extraction
-                display_usage()
+                print(display_usage())
             elif cmd == 'manual':
                 # Manual entry
                 manual_entry()
@@ -708,7 +718,7 @@ if __name__ == "__main__":
                 success = extract_usage_auto('firefox', headless=True)
                 print()  # Add spacing
                 if success or CONFIG_FILE.exists():
-                    display_usage()
+                    print(display_usage())
                 else:
                     print(f"{YELLOW}First time using claude-usage?{RESET}")
                     print(f"Run {BOLD}claude-usage setup-firefox{RESET} to set up automatic extraction")

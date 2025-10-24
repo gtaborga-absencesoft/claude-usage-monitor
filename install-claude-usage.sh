@@ -146,7 +146,7 @@ export PATH="$HOME/.local/bin:$PATH"
 # Step 4: Install Playwright
 # =============================================================================
 
-echo -e "\n${BOLD}${BLUE}[4/6] Installing Playwright...${RESET}\n"
+echo -e "\n${BOLD}${BLUE}[4/6] Installing Python dependencies...${RESET}\n"
 
 # Check if Playwright is already installed
 if python3 -c "import playwright" 2>/dev/null; then
@@ -160,6 +160,22 @@ else
         echo -e "${RED}✗ Failed to install Playwright${RESET}"
         echo -e "\nPlease install manually:"
         echo -e "  ${BOLD}pip3 install playwright${RESET}"
+        exit 1
+    fi
+fi
+
+# Check if Rich is already installed
+if python3 -c "import rich" 2>/dev/null; then
+    echo -e "${GREEN}✓ Rich library already installed${RESET}"
+else
+    echo -e "${DIM}Installing Rich library...${RESET}"
+
+    if pip3 install rich --quiet 2>&1 | grep -q "Successfully installed\|Requirement already satisfied"; then
+        echo -e "${GREEN}✓ Rich library installed${RESET}"
+    else
+        echo -e "${RED}✗ Failed to install Rich library${RESET}"
+        echo -e "\nPlease install manually:"
+        echo -e "  ${BOLD}pip3 install rich${RESET}"
         exit 1
     fi
 fi

@@ -61,12 +61,38 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+### Updating Existing Installation
+
+If you already have claude-usage installed and want to update to the latest version:
+
+```bash
+# Navigate to your cloned repository
+cd claude-usage-monitor
+
+# Pull latest changes (if using git)
+git pull
+
+# Run the update script
+bash claude-usage-update.sh
+```
+
+The update script will:
+- ✓ Install the Rich library dependency
+- ✓ Update your claude-usage script
+- ✓ Backup your old version
+- ✓ Keep your existing configuration and Firefox profile
+
+**What's new in the latest version:**
+- Smooth in-place display updates (no more scrolling!)
+- Enhanced terminal UI using Rich library
+- Improved countdown timer animation
+
 ### First Use
 
 **One-Time Setup (Recommended):**
 ```bash
-# 1. Install Playwright and Firefox
-pip install playwright
+# 1. Install dependencies
+pip install playwright rich
 playwright install firefox
 
 # 2. Set up Firefox profile (one-time login)
@@ -451,12 +477,14 @@ chmod 755 ~/.local/bin
 
 ## Technical Details
 
-- **Language**: Python 3 (standard library only)
-- **Dependencies**: None (uses only Python standard library)
+- **Language**: Python 3
+- **Dependencies**:
+  - Rich library (for smooth terminal UI)
+  - Playwright (optional, for automatic extraction)
 - **Platform**: macOS, Linux, WSL (any Unix-like system with Python 3)
 - **Config location**: `~/.config/claude-usage/`
 - **Executable location**: `~/.local/bin/claude-usage`
-- **Size**: ~10KB (single file)
+- **Size**: ~25KB (single file)
 
 ### Why It's Portable
 
@@ -477,6 +505,7 @@ chmod 755 ~/.local/bin
 claude-usage-monitor/             # This repository
 ├── README.md                     # This documentation
 ├── install-claude-usage.sh       # Portable installer script
+├── claude-usage-update.sh        # Update script for existing installations
 └── claude-usage                  # The main Python script
 ```
 
@@ -674,7 +703,8 @@ rm ~/.config/claude-usage/usage.json
 ---
 
 **Last Updated**: 2025-10-24
-**Version**: 4.0 (Continuous monitoring by default!)
+**Version**: 4.1 (Smooth in-place updates with Rich library!)
 **Documentation**: `README.md` (in repository root)
 **Installer**: `install-claude-usage.sh` (in repository root)
+**Updater**: `claude-usage-update.sh` (in repository root)
 **Main Script**: `claude-usage` (in repository root)
