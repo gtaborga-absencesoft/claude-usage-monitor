@@ -471,25 +471,31 @@ chmod 755 ~/.local/bin
 
 ## Files
 
-### Project Files
+### Repository Structure
 
 ```
-~/Documents/claude/
-├── claude-usage-monitor.md       # This documentation
-└── install-claude-usage.sh       # Portable installer script
+claude-usage-monitor/             # This repository
+├── README.md                     # This documentation
+├── install-claude-usage.sh       # Portable installer script
+└── claude-usage                  # The main Python script
+```
 
+### Installed Files
+
+After installation, the following files will be created:
+
+```
 ~/.local/bin/
-└── claude-usage                  # The main executable
+└── claude-usage                  # The installed executable
 
 ~/.config/claude-usage/
-└── usage.json                    # Your usage data (created on first run)
+├── usage.json                    # Your usage data (created on first run)
+└── firefox-profile/              # Dedicated Firefox profile for automation
 ```
 
 ### Installer Script
 
-**Location**: `~/Documents/claude/install-claude-usage.sh`
-
-The installer is a self-contained bash script that includes the entire Python tool embedded within it. This makes it perfect for sharing.
+The installer (`install-claude-usage.sh`) is located in the repository root alongside the `claude-usage` script. When you run the installer, it copies the script from the repository to `~/.local/bin/` and sets up your environment.
 
 ---
 
@@ -667,8 +673,8 @@ rm ~/.config/claude-usage/usage.json
 
 ---
 
-**Last Updated**: 2025-10-23
+**Last Updated**: 2025-10-24
 **Version**: 4.0 (Continuous monitoring by default!)
-**Documentation**: `~/Documents/claude/claude-usage-monitor.md`
-**Installer**: `~/Documents/claude/install-claude-usage-complete.sh`
-**Playwright Helper**: `~/Documents/claude/install-playwright.sh`
+**Documentation**: `README.md` (in repository root)
+**Installer**: `install-claude-usage.sh` (in repository root)
+**Main Script**: `claude-usage` (in repository root)

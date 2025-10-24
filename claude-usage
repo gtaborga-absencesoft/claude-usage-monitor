@@ -1,0 +1,771 @@
+#!/usr/bin/env python3
+"""
+Claude Usage Monitor - Terminal monitoring tool for Claude usage limits
+Matches the actual claude.ai/settings/usage interface
+Supports both manual and automatic extraction
+"""
+
+import os
+import sys
+import json
+import re
+import time
+from datetime import datetime
+from pathlib import Path
+
+# ANSI color codes
+BLUE = '\033[94m'
+GREEN = '\033[92m'
+YELLOW = '\033[93m'
+RED = '\033[91m'
+CYAN = '\033[96m'
+MAGENTA = '\033[95m'
+BOLD = '\033[1m'
+DIM = '\033[2m'
+RESET = '\033[0m'
+
+CONFIG_DIR = Path.home() / '.config' / 'claude-usage'
+CONFIG_FILE = CONFIG_DIR / 'usage.json'
+FIREFOX_PROFILE_DIR = CONFIG_DIR / 'firefox-profile'
+
+def ensure_config_dir():
+    """Ensure config directory exists"""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+def load_config():
+    """Load usage configuration"""
+    if not CONFIG_FILE.exists():
+        return None
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"{RED}Error loading config: {e}{RESET}")
+        return None
+
+def save_config(config):
+    """Save usage configuration"""
+    ensure_config_dir()
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"{RED}Error saving config: {e}{RESET}")
+        return False
+
+def create_progress_bar(percentage, width=40):
+    """Create a visual progress bar from percentage"""
+    percentage = min(max(percentage, 0), 100)  # Clamp between 0-100
+
+    filled = int(width * percentage / 100)
+    bar = '█' * filled + '░' * (width - filled)
+
+    # Color based on usage
+    if percentage >= 90:
+        color = RED
+    elif percentage >= 75:
+        color = YELLOW
+    else:
+        color = GREEN
+
+    return f"{color}{bar}{RESET} {percentage:.0f}%"
+
+def get_chrome_user_data_dir():
+    """Get Chrome user data directory based on OS"""
+    home = Path.home()
+    if sys.platform == 'darwin':  # macOS
+        return home / 'Library' / 'Application Support' / 'Google' / 'Chrome'
+    elif sys.platform == 'win32':  # Windows
+        return home / 'AppData' / 'Local' / 'Google' / 'Chrome' / 'User Data'
+    else:  # Linux
+        return home / '.config' / 'google-chrome'
+
+def get_firefox_profile_dir():
+    """Get dedicated Firefox profile directory for automation
+
+    Uses a dedicated profile at ~/.config/claude-usage/firefox-profile
+    This avoids conflicts with system Firefox profiles.
+    """
+    return FIREFOX_PROFILE_DIR
+
+def ensure_firefox_profile():
+    """Ensure the dedicated Firefox profile directory exists"""
+    FIREFOX_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+
+def setup_firefox():
+    """Launch Firefox with dedicated profile for initial setup/login"""
+    try:
+        from playwright.sync_api import sync_playwright
+        from playwright._impl._errors import TargetClosedError
+    except ImportError:
+        print(f"{RED}Error: Playwright is not installed.{RESET}")
+        print(f"\nTo use Firefox automation, install Playwright:")
+        print(f"  {BOLD}pip install playwright{RESET}")
+        print(f"  {BOLD}playwright install firefox{RESET}\n")
+        return False
+
+    ensure_firefox_profile()
+    firefox_profile = get_firefox_profile_dir()
+
+    print(f"\n{BOLD}{CYAN}Firefox Setup - One-Time Login{RESET}\n")
+    print(f"{DIM}This will launch Firefox with a dedicated profile for automation.{RESET}")
+    print(f"{DIM}Profile location: {firefox_profile}{RESET}\n")
+    print(f"{BOLD}Instructions:{RESET}")
+    print(f"  1. Firefox will open in a moment")
+    print(f"  2. Navigate to: {CYAN}https://claude.ai/settings/usage{RESET}")
+    print(f"  3. Log in to your Claude account")
+    print(f"  4. Verify you can see the usage page")
+    print(f"  5. Close the browser window when done")
+    print(f"\n{YELLOW}After logging in once, just run 'claude-usage' to start monitoring!{RESET}\n")
+
+    try:
+        input(f"Press {BOLD}Enter{RESET} to launch Firefox...")
+    except KeyboardInterrupt:
+        print(f"\n\n{YELLOW}Setup cancelled.{RESET}\n")
+        return False
+
+    try:
+        with sync_playwright() as p:
+            print(f"\n{BLUE}Launching Firefox with dedicated profile...{RESET}\n")
+            browser_context = p.firefox.launch_persistent_context(
+                str(firefox_profile),
+                headless=False
+            )
+
+            # Open the usage page
+            page = browser_context.pages[0] if browser_context.pages else browser_context.new_page()
+            page.goto('https://claude.ai/settings/usage', timeout=60000)
+
+            print(f"{GREEN}✓ Firefox opened!{RESET}")
+            print(f"{DIM}Log in and explore. Close the browser when done.{RESET}\n")
+
+            # Wait for user to close the browser
+            try:
+                page.wait_for_event('close', timeout=0)
+            except (TargetClosedError, Exception):
+                pass
+
+            # Close browser context safely
+            try:
+                browser_context.close()
+            except (TargetClosedError, Exception):
+                pass
+
+            print(f"\n{GREEN}✓ Setup complete!{RESET}")
+            print(f"\nJust run: {BOLD}claude-usage{RESET}")
+            print(f"Starts continuous monitoring with auto-refresh every 5 minutes.")
+            print(f"Press Ctrl+C to stop anytime.\n")
+            return True
+
+    except KeyboardInterrupt:
+        print(f"\n\n{YELLOW}Setup cancelled.{RESET}\n")
+        return False
+    except Exception as e:
+        print(f"\n{RED}Error during setup: {e}{RESET}\n")
+        return False
+
+def extract_usage_auto(browser='firefox', headless=False, progress_callback=None):
+    """Automatically extract usage from claude.ai using browser automation
+
+    Args:
+        browser: 'firefox' or 'chrome' (default: 'firefox')
+        headless: Run browser in headless mode (default: False)
+        progress_callback: Optional callback function for progress updates
+    """
+    browser = browser.lower()
+    if browser not in ['firefox', 'chrome']:
+        print(f"{RED}Error: Invalid browser '{browser}'. Use 'firefox' or 'chrome'.{RESET}\n")
+        return False
+
+    try:
+        from playwright.sync_api import sync_playwright
+        from playwright._impl._errors import TargetClosedError
+    except ImportError:
+        print(f"{RED}Error: Playwright is not installed.{RESET}")
+        print(f"\nTo use automatic extraction, install Playwright:")
+        print(f"  {BOLD}pip install playwright{RESET}")
+        print(f"  {BOLD}playwright install firefox chromium{RESET}")
+        print(f"\nOr use manual entry:")
+        print(f"  {BOLD}claude-usage manual{RESET}\n")
+        return False
+
+    if not headless:
+        print(f"\n{BOLD}{CYAN}Automatic Usage Extraction{RESET}\n")
+        print(f"{DIM}Opening {browser.title()} to extract usage data...{RESET}\n")
+
+    def report_progress(message):
+        """Helper to report progress if callback is provided"""
+        if progress_callback:
+            progress_callback(message)
+        elif not headless:
+            print(message)
+
+    try:
+        with sync_playwright() as p:
+            # Try to use browser profile, but fallback if browser is already running
+            browser_context = None
+            page = None
+
+            if browser == 'firefox':
+                ensure_firefox_profile()
+                firefox_profile = get_firefox_profile_dir()
+
+                if firefox_profile.exists():
+                    try:
+                        report_progress(f"→ Launching Firefox...")
+                        browser_context = p.firefox.launch_persistent_context(
+                            str(firefox_profile),
+                            headless=headless
+                        )
+                        page = browser_context.pages[0] if browser_context.pages else browser_context.new_page()
+                    except Exception as e:
+                        if "already in use" in str(e) or "lock" in str(e).lower():
+                            print(f"{YELLOW}Firefox is currently running. Please close Firefox and try again.{RESET}")
+                            print(f"\nAlternatively, you can:")
+                            print(f"  1. Close all Firefox windows")
+                            print(f"  2. Run: {BOLD}claude-usage auto{RESET}")
+                            print(f"\nOr use manual mode:")
+                            print(f"  {BOLD}claude-usage manual{RESET}\n")
+                            return False
+                        else:
+                            raise
+
+                if not browser_context:
+                    report_progress(f"→ Launching Firefox without profile...")
+                    browser_instance = p.firefox.launch(headless=headless)
+                    browser_context = browser_instance
+                    page = browser_instance.new_page()
+
+            else:  # chrome
+                chrome_data = get_chrome_user_data_dir()
+
+                if chrome_data.exists():
+                    try:
+                        report_progress(f"→ Launching Chrome...")
+                        browser_context = p.chromium.launch_persistent_context(
+                            str(chrome_data),
+                            headless=headless,
+                            channel='chrome'
+                        )
+                        page = browser_context.pages[0] if browser_context.pages else browser_context.new_page()
+                    except Exception as e:
+                        if "ProcessSingleton" in str(e) or "already in use" in str(e):
+                            print(f"{YELLOW}Chrome is currently running. Please close Chrome and try again.{RESET}")
+                            print(f"\nAlternatively, you can:")
+                            print(f"  1. Close all Chrome windows")
+                            print(f"  2. Run: {BOLD}claude-usage auto --browser chrome{RESET}")
+                            print(f"\nOr use manual mode:")
+                            print(f"  {BOLD}claude-usage manual{RESET}\n")
+                            return False
+                        else:
+                            raise
+
+                if not browser_context:
+                    report_progress(f"→ Launching Chrome without profile...")
+                    browser_instance = p.chromium.launch(headless=headless)
+                    browser_context = browser_instance
+                    page = browser_instance.new_page()
+
+            # Navigate to usage page
+            report_progress(f"→ Loading claude.ai/settings/usage...")
+            try:
+                # Try with networkidle first (more reliable but slower)
+                page.goto('https://claude.ai/settings/usage', wait_until='networkidle', timeout=60000)
+            except Exception as e:
+                if 'Timeout' in str(e):
+                    # Fallback: use domcontentloaded which is faster and more reliable
+                    report_progress(f"→ Retrying with faster load strategy...")
+                    page.goto('https://claude.ai/settings/usage', wait_until='domcontentloaded', timeout=60000)
+                else:
+                    raise
+
+            # Wait a bit for dynamic content to render
+            page.wait_for_timeout(5000)
+
+            # Extract the page content
+            report_progress(f"→ Extracting usage data...")
+            content = page.content()
+
+            # Parse usage data from HTML
+            # Look for patterns like "33% used", "84% used", etc.
+            percentages = re.findall(r'(\d+)%\s+used', content, re.IGNORECASE)
+
+            # Look for reset times like "Resets in 2 hr 5 min"
+            # More specific pattern to avoid capturing extra HTML/JSON
+            reset_times = re.findall(r'Resets in\s+(\d+\s+(?:hr|hour|hours?)\s+\d+\s+(?:min|minute|minutes?))', content, re.IGNORECASE)
+            # Also try simpler patterns like "1 hr 30 min", "2 hours", "30 minutes"
+            if not reset_times:
+                reset_times = re.findall(r'Resets in\s+([\d\s]+(?:hr|hour|min|minute)[\d\s]*(?:hr|hour|min|minute)?)', content, re.IGNORECASE)
+
+            # Close browser context safely
+            try:
+                browser_context.close()
+            except (TargetClosedError, Exception):
+                # Context already closed, ignore
+                pass
+
+            if len(percentages) >= 2:  # Need at least current session and weekly
+                # Extract values
+                current_percent = int(percentages[0]) if len(percentages) > 0 else 0
+                weekly_percent = int(percentages[1]) if len(percentages) > 1 else 0
+                opus_percent = int(percentages[2]) if len(percentages) > 2 else 0
+
+                current_reset = reset_times[0].strip() if len(reset_times) > 0 else ''
+                weekly_reset = reset_times[1].strip() if len(reset_times) > 1 else ''
+                opus_reset = reset_times[2].strip() if len(reset_times) > 2 else weekly_reset
+
+                if not headless:
+                    print(f"\n{GREEN}✓ Successfully extracted usage data:{RESET}")
+                    print(f"  Current Session: {current_percent}% (resets in {current_reset})")
+                    print(f"  Weekly (All Models): {weekly_percent}% (resets in {weekly_reset})")
+                    print(f"  Weekly (Opus): {opus_percent}% (resets in {opus_reset})")
+
+                # Detect plan (Pro is default for now)
+                plan = "Pro"  # Could be extracted from page as well
+
+                # Build config
+                report_progress(f"→ Saving configuration...")
+                new_config = {
+                    'plan': plan,
+                    'last_updated': datetime.now().isoformat(),
+                    'extraction_method': 'automatic',
+                    'current_session': {
+                        'used_percent': current_percent,
+                        'reset_time': current_reset
+                    },
+                    'weekly_all_models': {
+                        'used_percent': weekly_percent,
+                        'reset_time': weekly_reset
+                    },
+                    'weekly_opus': {
+                        'used_percent': opus_percent,
+                        'reset_time': opus_reset
+                    }
+                }
+
+                if save_config(new_config):
+                    report_progress(f"{GREEN}✓ Update complete!{RESET}")
+                    if not headless:
+                        print(f"\nRun {BOLD}claude-usage{RESET} to view your usage.\n")
+                    return True
+                else:
+                    report_progress(f"{RED}✗ Failed to save configuration{RESET}")
+                    return False
+            else:
+                print(f"\n{RED}✗ Could not extract usage data from page{RESET}")
+                print(f"{YELLOW}The page structure may have changed or you may need to log in.{RESET}")
+                print(f"\nFallback to manual entry:")
+                print(f"  {BOLD}claude-usage manual{RESET}\n")
+                return False
+
+    except KeyboardInterrupt:
+        # User interrupted with Ctrl+C
+        # Clean up browser context if it exists
+        if 'browser_context' in locals() and browser_context:
+            try:
+                browser_context.close()
+            except (TargetClosedError, Exception):
+                pass
+        raise  # Re-raise to be handled by caller
+    except TargetClosedError:
+        # Browser was closed unexpectedly
+        print(f"\n{YELLOW}Browser was closed during extraction.{RESET}")
+        return False
+    except Exception as e:
+        # Clean up browser context if it exists
+        if 'browser_context' in locals() and browser_context:
+            try:
+                browser_context.close()
+            except (TargetClosedError, Exception):
+                pass
+        print(f"\n{RED}Error during extraction: {e}{RESET}")
+        print(f"\nFallback to manual update:")
+        print(f"  {BOLD}claude-usage manual{RESET}\n")
+        return False
+
+def show_countdown(seconds):
+    """Display a countdown timer with spinner
+
+    Args:
+        seconds: Number of seconds to count down from
+    """
+    spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    spinner_idx = 0
+
+    try:
+        for remaining in range(seconds, 0, -1):
+            minutes = remaining // 60
+            secs = remaining % 60
+            spinner = spinners[spinner_idx % len(spinners)]
+
+            if minutes > 0:
+                time_str = f"{minutes}m {secs}s"
+            else:
+                time_str = f"{secs}s"
+
+            print(f"\r{DIM}Next update in: {time_str} {spinner}{RESET}", end='', flush=True)
+            spinner_idx += 1
+            time.sleep(1)
+
+        print(f"\r{DIM}Updating usage...{RESET}" + " " * 30)  # Clear the line
+    except KeyboardInterrupt:
+        print("\n")  # Move to next line on Ctrl+C
+        raise
+
+def auto_refresh_mode(browser='firefox', interval=300):
+    """Run auto-refresh mode with continuous updates
+
+    Args:
+        browser: Browser to use ('firefox' or 'chrome')
+        interval: Refresh interval in seconds (default: 300 = 5 minutes)
+    """
+    print(f"\n{BOLD}{CYAN}Auto-Refresh Mode{RESET}")
+    print(f"{DIM}Monitoring usage every {interval // 60} minutes. Press Ctrl+C to stop.{RESET}\n")
+
+    progress_messages = []
+
+    def progress_callback(message):
+        """Collect progress messages to display"""
+        progress_messages.append(message)
+        print(message)
+
+    try:
+        while True:
+            # Display current usage
+            display_usage(clear_screen=True)
+
+            # Show auto-refresh info
+            print(f"{CYAN}─────────────────────────────────────────────────────────────────{RESET}")
+            print(f"{DIM}Auto-refresh: Enabled (every {interval // 60} minutes) | Press Ctrl+C to stop{RESET}")
+
+            # Show countdown
+            try:
+                show_countdown(interval)
+            except KeyboardInterrupt:
+                # User pressed Ctrl+C during countdown
+                raise
+
+            # Clear progress messages for next run
+            progress_messages.clear()
+
+            # Run headless extraction with progress
+            print()  # New line after countdown
+            try:
+                success = extract_usage_auto(browser, headless=True, progress_callback=progress_callback)
+            except KeyboardInterrupt:
+                # User pressed Ctrl+C during extraction
+                raise
+
+            if not success:
+                print(f"{YELLOW}Failed to update usage. Retrying in {interval // 60} minutes...{RESET}")
+
+            # Small pause before redisplaying
+            time.sleep(2)
+
+    except KeyboardInterrupt:
+        print(f"\n\n{YELLOW}Auto-refresh stopped.{RESET}")
+        print(f"Run {BOLD}claude-usage view{RESET} to view your current usage.\n")
+
+def display_usage(clear_screen=True):
+    """Display usage information in terminal
+
+    Args:
+        clear_screen: Whether to clear the screen before displaying (default: True)
+    """
+    config = load_config()
+
+    # Clear screen if requested
+    if clear_screen:
+        print("\033[2J\033[H", end='')
+
+    # Header
+    print(f"\n{BOLD}{CYAN}╔═══════════════════════════════════════════════════════════════╗{RESET}")
+    print(f"{BOLD}{CYAN}║                 Claude Usage Monitor                          ║{RESET}")
+    print(f"{BOLD}{CYAN}╚═══════════════════════════════════════════════════════════════╝{RESET}\n")
+
+    if not config:
+        print(f"{YELLOW}No usage data configured yet.{RESET}")
+        print(f"\nRun {BOLD}claude-usage auto{RESET} for automatic extraction")
+        print(f"Or  {BOLD}claude-usage manual{RESET} for manual entry\n")
+        print(f"{DIM}Visit https://claude.ai/settings/usage to see your actual usage{RESET}\n")
+        return
+
+    # Display timestamp
+    last_update = config.get('last_updated', 'Never')
+    extraction_method = config.get('extraction_method', 'manual')
+    if last_update != 'Never':
+        last_update = datetime.fromisoformat(last_update).strftime('%Y-%m-%d %H:%M:%S')
+    print(f"{DIM}Last updated: {last_update} ({extraction_method}){RESET}\n")
+
+    # Plan information
+    plan = config.get('plan', 'Unknown')
+    print(f"{BOLD}Plan:{RESET} {MAGENTA}{plan}{RESET}\n")
+
+    # Current session
+    if 'current_session' in config:
+        session = config['current_session']
+        percent = session.get('used_percent', 0)
+        reset_time = session.get('reset_time', 'Unknown')
+
+        print(f"{BOLD}Current Session:{RESET}")
+        print(f"  {create_progress_bar(percent)}")
+        if reset_time != 'Unknown':
+            print(f"  {DIM}Resets in: {reset_time}{RESET}\n")
+        else:
+            print()
+
+    # Weekly limits - All models
+    if 'weekly_all_models' in config:
+        weekly = config['weekly_all_models']
+        percent = weekly.get('used_percent', 0)
+        reset_time = weekly.get('reset_time', 'Unknown')
+
+        print(f"{BOLD}Weekly Limits (All Models):{RESET}")
+        print(f"  {create_progress_bar(percent)}")
+        if reset_time != 'Unknown':
+            print(f"  {DIM}Resets in: {reset_time}{RESET}\n")
+        else:
+            print()
+
+    # Weekly limits - Opus only
+    if 'weekly_opus' in config:
+        opus = config['weekly_opus']
+        percent = opus.get('used_percent', 0)
+        reset_time = opus.get('reset_time', 'Unknown')
+
+        print(f"{BOLD}Weekly Limits (Opus Only):{RESET}")
+        print(f"  {create_progress_bar(percent)}")
+        if reset_time != 'Unknown':
+            print(f"  {DIM}Resets in: {reset_time}{RESET}\n")
+        else:
+            print()
+
+    # Additional notes
+    if 'notes' in config:
+        print(f"{BOLD}Notes:{RESET}")
+        print(f"  {config['notes']}\n")
+
+    print(f"{CYAN}─────────────────────────────────────────────────────────────────{RESET}")
+    print(f"\n{DIM}Monitor: claude-usage (continuous) | Once: claude-usage --once | Manual: claude-usage manual{RESET}")
+    print(f"{DIM}Help: claude-usage --help{RESET}\n")
+
+def manual_entry():
+    """Interactive manual entry of usage information"""
+    config = load_config() or {}
+
+    print(f"\n{BOLD}{CYAN}Update Claude Usage Information{RESET}\n")
+    print(f"{DIM}Visit https://claude.ai/settings/usage to see your current usage{RESET}\n")
+
+    # Plan
+    plan = input(f"Plan (Pro/Free/Enterprise) [{config.get('plan', 'Pro')}]: ").strip() or config.get('plan', 'Pro')
+
+    # Current session
+    print(f"\n{BOLD}Current Session:{RESET}")
+    session_percent = input(f"Usage percentage [{config.get('current_session', {}).get('used_percent', 0)}]: ").strip()
+    session_reset = input(f"Resets in (e.g., '2 hr 5 min') [{config.get('current_session', {}).get('reset_time', '')}]: ").strip()
+
+    # Weekly limits - All models
+    print(f"\n{BOLD}Weekly Limits (All Models):{RESET}")
+    weekly_percent = input(f"Usage percentage [{config.get('weekly_all_models', {}).get('used_percent', 0)}]: ").strip()
+    weekly_reset = input(f"Resets in (e.g., '16 hr 5 min') [{config.get('weekly_all_models', {}).get('reset_time', '')}]: ").strip()
+
+    # Weekly limits - Opus only
+    print(f"\n{BOLD}Weekly Limits (Opus Only):{RESET}")
+    opus_percent = input(f"Usage percentage [{config.get('weekly_opus', {}).get('used_percent', 0)}]: ").strip()
+    opus_reset = input(f"Resets in (e.g., '16 hr 5 min') [{config.get('weekly_opus', {}).get('reset_time', '')}]: ").strip()
+
+    # Build config
+    new_config = {
+        'plan': plan,
+        'last_updated': datetime.now().isoformat(),
+        'extraction_method': 'manual',
+        'current_session': {
+            'used_percent': int(session_percent) if session_percent else config.get('current_session', {}).get('used_percent', 0),
+            'reset_time': session_reset or config.get('current_session', {}).get('reset_time', '')
+        },
+        'weekly_all_models': {
+            'used_percent': int(weekly_percent) if weekly_percent else config.get('weekly_all_models', {}).get('used_percent', 0),
+            'reset_time': weekly_reset or config.get('weekly_all_models', {}).get('reset_time', '')
+        },
+        'weekly_opus': {
+            'used_percent': int(opus_percent) if opus_percent else config.get('weekly_opus', {}).get('used_percent', 0),
+            'reset_time': opus_reset or config.get('weekly_opus', {}).get('reset_time', '')
+        }
+    }
+
+    if save_config(new_config):
+        print(f"\n{GREEN}✓ Usage information updated successfully!{RESET}")
+        print(f"\nRun {BOLD}claude-usage{RESET} to view your usage.\n")
+    else:
+        print(f"\n{RED}✗ Failed to save configuration{RESET}\n")
+
+def show_help():
+    """Display help information"""
+    print(f"""
+{BOLD}{CYAN}Claude Usage Monitor{RESET} - Terminal monitoring for Claude usage
+
+{BOLD}USAGE:{RESET}
+  claude-usage                      Auto-refresh mode (default, updates every 5 min)
+  claude-usage --once               One-time extract + display, then exit
+  claude-usage view                 Display cached data only (no extraction)
+  claude-usage manual               Manual entry mode
+  claude-usage setup-firefox        Set up Firefox profile (one-time login)
+  claude-usage auto [browser]       Auto-extract with visible browser
+  claude-usage --help               Show this help message
+
+{BOLD}OPTIONS:{RESET}
+  --once                            Extract once and display, then exit
+  --browser NAME, -b NAME           Specify browser: firefox or chrome (for 'auto' mode)
+  --headless                        Run in headless mode (for 'auto' mode)
+  --interval SECONDS                Refresh interval in seconds (default: 300)
+
+{BOLD}CONFIG FILE:{RESET}
+  {CONFIG_FILE}
+
+{BOLD}FIREFOX PROFILE:{RESET}
+  {FIREFOX_PROFILE_DIR}
+
+{BOLD}GETTING STARTED:{RESET}
+  # 1. Install Playwright and Firefox
+  pip install playwright
+  playwright install firefox
+
+  # 2. Set up Firefox (one-time login)
+  claude-usage setup-firefox
+  # This opens Firefox - log in to Claude, then close the browser
+
+  # 3. That's it! Just run:
+  claude-usage
+  # Starts continuous monitoring (updates every 5 minutes)
+  # Press Ctrl+C to stop
+
+{BOLD}EXAMPLES:{RESET}
+  # Default: continuous auto-refresh (updates every 5 min)
+  claude-usage
+
+  # One-time extraction and display, then exit
+  claude-usage --once
+
+  # View cached data only (no extraction)
+  claude-usage view
+
+  # Manual entry mode
+  claude-usage manual
+
+  # First time setup with Firefox
+  claude-usage setup-firefox
+
+  # Visible browser extraction (for debugging)
+  claude-usage auto
+
+  # Auto-refresh with visible browser
+  claude-usage auto --headless
+
+{BOLD}AUTOMATIC EXTRACTION:{RESET}
+  Browser options:
+    firefox  - Uses dedicated profile (default, won't interfere with your browsers)
+    chrome   - Uses your Chrome profile (requires closing Chrome first)
+
+  Firefox setup:
+    - Uses a dedicated profile at ~/.config/claude-usage/firefox-profile
+    - Run 'claude-usage setup-firefox' once to log in
+    - After that, just 'claude-usage' works seamlessly (headless by default)
+
+{BOLD}NOTES:{RESET}
+  - Default: Continuous monitoring (updates every 5 min, press Ctrl+C to stop)
+  - Use 'claude-usage --once' for quick one-time check
+  - Firefox uses a dedicated profile that won't conflict with your regular browsers
+  - All extraction runs headless (no browser window) by default
+  - Manual mode is always available as fallback
+  - Data is stored locally and never shared
+
+{BOLD}USAGE METRICS:{RESET}
+  The tool tracks three metrics from claude.ai/settings/usage:
+
+  1. Current Session - Usage in your current chat session
+  2. Weekly Limits (All Models) - Combined usage across all Claude models
+  3. Weekly Limits (Opus Only) - Usage specifically for Claude Opus
+""")
+
+if __name__ == "__main__":
+    try:
+        if len(sys.argv) > 1:
+            cmd = sys.argv[1]
+            if cmd in ['--help', '-h', 'help']:
+                show_help()
+            elif cmd == 'setup-firefox':
+                setup_firefox()
+            elif cmd == 'view':
+                # Display only, no extraction
+                display_usage()
+            elif cmd == 'manual':
+                # Manual entry
+                manual_entry()
+            elif cmd == '--once':
+                # One-time extraction and display
+                print(f"\n{BOLD}{CYAN}Fetching latest usage...{RESET}\n")
+                success = extract_usage_auto('firefox', headless=True)
+                print()  # Add spacing
+                if success or CONFIG_FILE.exists():
+                    display_usage()
+                else:
+                    print(f"{YELLOW}First time using claude-usage?{RESET}")
+                    print(f"Run {BOLD}claude-usage setup-firefox{RESET} to set up automatic extraction")
+                    print(f"Or use {BOLD}claude-usage manual{RESET} for manual entry\n")
+            elif cmd == 'auto':
+                # Parse parameters
+                browser = 'firefox'  # Default to Firefox
+                headless = False
+                interval = 300  # Default 5 minutes
+
+                i = 2
+                while i < len(sys.argv):
+                    arg = sys.argv[i]
+
+                    if arg in ['--browser', '-b']:
+                        if i + 1 < len(sys.argv):
+                            browser = sys.argv[i + 1]
+                            i += 2
+                        else:
+                            print(f"{RED}Error: --browser requires a value (firefox or chrome){RESET}\n")
+                            sys.exit(1)
+                    elif arg == '--headless':
+                        headless = True
+                        i += 1
+                    elif arg == '--interval':
+                        if i + 1 < len(sys.argv):
+                            try:
+                                interval = int(sys.argv[i + 1])
+                                if interval < 1:
+                                    print(f"{RED}Error: --interval must be positive{RESET}\n")
+                                    sys.exit(1)
+                            except ValueError:
+                                print(f"{RED}Error: --interval requires a number (seconds){RESET}\n")
+                                sys.exit(1)
+                            i += 2
+                        else:
+                            print(f"{RED}Error: --interval requires a value (seconds){RESET}\n")
+                            sys.exit(1)
+                    elif arg in ['firefox', 'chrome']:
+                        # Allow direct browser name without --browser flag
+                        browser = arg
+                        i += 1
+                    else:
+                        print(f"{RED}Error: Unknown parameter '{arg}'{RESET}\n")
+                        sys.exit(1)
+
+                # Run in appropriate mode
+                if headless:
+                    auto_refresh_mode(browser, interval)
+                else:
+                    extract_usage_auto(browser)
+            else:
+                print(f"{RED}Unknown command: {cmd}{RESET}")
+                show_help()
+        else:
+            # DEFAULT: Continuous auto-refresh mode
+            auto_refresh_mode('firefox', 300)
+    except KeyboardInterrupt:
+        print(f"\n\n{YELLOW}Interrupted.{RESET}")
+        sys.exit(0)

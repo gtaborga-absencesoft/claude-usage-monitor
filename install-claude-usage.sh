@@ -28,7 +28,9 @@ RESET='\033[0m'
 INSTALL_DIR="$HOME/.local/bin"
 SCRIPT_NAME="claude-usage"
 INSTALL_PATH="$INSTALL_DIR/$SCRIPT_NAME"
-SOURCE_SCRIPT="$HOME/.local/bin/claude-usage"
+# Get the directory where this installer is located
+INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_SCRIPT="$INSTALLER_DIR/claude-usage"
 
 echo -e "${BOLD}${CYAN}"
 echo "╔═══════════════════════════════════════════════════════════════╗"
@@ -80,10 +82,11 @@ if [ ! -d "$INSTALL_DIR" ]; then
     echo -e "${DIM}Created directory: ${INSTALL_DIR}${RESET}"
 fi
 
-# Check if source script exists (already installed)
+# Check if source script exists in the installer directory
 if [ ! -f "$SOURCE_SCRIPT" ]; then
     echo -e "${RED}✗ Source script not found at ${SOURCE_SCRIPT}${RESET}"
-    echo -e "\nPlease ensure claude-usage is already installed in ~/.local/bin/"
+    echo -e "\nPlease ensure you're running this installer from the correct directory"
+    echo -e "The claude-usage script should be in the same directory as this installer"
     exit 1
 fi
 
@@ -258,4 +261,4 @@ if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
 fi
 
 echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-echo -e "${DIM}For issues or questions, see: ~/Documents/claude/claude-usage-monitor.md${RESET}\n"
+echo -e "${DIM}For issues or questions, see: README.md in the repository${RESET}\n"
