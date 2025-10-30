@@ -127,10 +127,11 @@ claude-usage
 ```
 
 This command will:
-1. Automatically extract fresh usage data from claude.ai (headless Firefox)
-2. Display your dashboard with colorful progress bars
-3. Show countdown timer until next refresh
-4. Update every 5 minutes automatically
+1. Display your cached usage data immediately
+2. Automatically extract fresh usage data from claude.ai (headless Firefox)
+3. Display your updated dashboard with colorful progress bars
+4. Show countdown timer until next refresh
+5. Update every 5 minutes automatically
 
 **That's it!** Just `claude-usage` - continuous monitoring by default. Press Ctrl+C to stop.
 
@@ -175,11 +176,11 @@ Resets in (e.g., '2 hr 5 min') []: 2 hr 5 min
 
 Weekly Limits (All Models):
 Usage percentage [0]: 84
-Resets in (e.g., '16 hr 5 min') []: 16 hr 5 min
+Resets in (e.g., 'Thu 9:00 AM' or '16 hr') []: Thu 9:00 AM
 
 Weekly Limits (Opus Only):
 Usage percentage [0]: 0
-Resets in (e.g., '16 hr 5 min') []: 16 hr 5 min
+Resets in (e.g., 'Thu 9:00 AM' or '16 hr') []: Thu 9:00 AM
 ```
 
 ### Advanced: Visible Browser Mode
@@ -230,15 +231,15 @@ Plan: Pro
 
 Current Session:
   █████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░ 33%
-  Resets in: 2 hr 5 min
+  Resets in 2 hr 5 min
 
 Weekly Limits (All Models):
   █████████████████████████████████░░░░░░░ 84%
-  Resets in: 16 hr 5 min
+  Resets Thu 9:00 AM
 
 Weekly Limits (Opus Only):
   ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0%
-  Resets in: 16 hr 5 min
+  Resets Thu 9:00 AM
 
 ─────────────────────────────────────────────────────────────────
 
@@ -287,15 +288,18 @@ Always know when you last updated your usage data.
   "last_updated": "2025-10-22T14:30:00.123456",
   "current_session": {
     "used_percent": 33,
-    "reset_time": "2 hr 5 min"
+    "reset_time": "2 hr 5 min",
+    "reset_type": "in"
   },
   "weekly_all_models": {
     "used_percent": 84,
-    "reset_time": "16 hr 5 min"
+    "reset_time": "Thu 9:00 AM",
+    "reset_type": "at"
   },
   "weekly_opus": {
     "used_percent": 0,
-    "reset_time": "16 hr 5 min"
+    "reset_time": "Thu 9:00 AM",
+    "reset_type": "at"
   }
 }
 ```
@@ -360,11 +364,12 @@ claude-usage
 ```
 
 The tool automatically:
-1. Extracts fresh data from claude.ai (headless)
-2. Displays your dashboard with progress bars
-3. Shows countdown timer until next refresh
-4. Updates continuously every 5 minutes
-5. Press Ctrl+C to stop monitoring
+1. Displays your cached data immediately (no delay!)
+2. Extracts fresh data from claude.ai in the background (headless)
+3. Updates your dashboard with the latest progress bars
+4. Shows countdown timer until next refresh
+5. Updates continuously every 5 minutes
+6. Press Ctrl+C to stop monitoring
 
 **Quick Check:**
 ```bash
@@ -393,16 +398,19 @@ claude-usage manual
 - Resets frequently (every few hours)
 - Tracks usage in your current active session
 - Helps pace your conversation
+- Shows relative reset time: "Resets in 3 hr 44 min"
 
 **Weekly Limits (All Models):**
 - Resets weekly
 - Combines usage from all Claude models (Sonnet, Haiku, etc.)
 - Your main usage limit to watch
+- Shows absolute reset time: "Resets Thu 9:00 AM" (or relative if < 24 hours)
 
 **Weekly Limits (Opus Only):**
 - Resets weekly (same as all models)
 - Separate limit just for Claude Opus
 - Often shows 0% if you haven't used Opus
+- Shows same reset time as Weekly (All Models): "Resets Thu 9:00 AM"
 
 ### How Often to Monitor
 
@@ -702,8 +710,8 @@ rm ~/.config/claude-usage/usage.json
 
 ---
 
-**Last Updated**: 2025-10-24
-**Version**: 4.1 (Smooth in-place updates with Rich library!)
+**Last Updated**: 2025-10-30
+**Version**: 4.2 (Immediate display + improved reset time parsing!)
 **Documentation**: `README.md` (in repository root)
 **Installer**: `install-claude-usage.sh` (in repository root)
 **Updater**: `claude-usage-update.sh` (in repository root)

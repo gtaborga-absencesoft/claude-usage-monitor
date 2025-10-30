@@ -298,12 +298,34 @@ def extract_usage_auto(browser='firefox', headless=False, progress_callback=None
             # Look for patterns like "33% used", "84% used", etc.
             percentages = re.findall(r'(\d+)%\s+used', content, re.IGNORECASE)
 
-            # Look for reset times like "Resets in 2 hr 5 min"
-            # More specific pattern to avoid capturing extra HTML/JSON
-            reset_times = re.findall(r'Resets in\s+(\d+\s+(?:hr|hour|hours?)\s+\d+\s+(?:min|minute|minutes?))', content, re.IGNORECASE)
-            # Also try simpler patterns like "1 hr 30 min", "2 hours", "30 minutes"
-            if not reset_times:
-                reset_times = re.findall(r'Resets in\s+([\d\s]+(?:hr|hour|min|minute)[\d\s]*(?:hr|hour|min|minute)?)', content, re.IGNORECASE)
+            # Look for reset times - two patterns:
+            # Type A: "Resets in X hr Y min" (relative time - current session)
+            # Type B: "Resets Day HH:MM AM/PM" (absolute time - weekly limits)
+
+            # Find all "Resets" patterns with their positions to preserve order
+            all_resets = []
+
+            # Pattern A1: "Resets in" + hours and minutes
+            for match in re.finditer(r'Resets in\s+(\d+\s+(?:hr|hour|hours?)\s+\d+\s+(?:min|mins|minute|minutes?))', content, re.IGNORECASE):
+                all_resets.append((match.start(), 'in', match.group(1)))
+
+            # Pattern A2: "Resets in" + minutes only
+            for match in re.finditer(r'Resets in\s+(\d+\s+(?:min|mins|minute|minutes?))', content, re.IGNORECASE):
+                all_resets.append((match.start(), 'in', match.group(1)))
+
+            # Pattern A3: "Resets in" + hours only
+            for match in re.finditer(r'Resets in\s+(\d+\s+(?:hr|hour|hours?))', content, re.IGNORECASE):
+                all_resets.append((match.start(), 'in', match.group(1)))
+
+            # Pattern B: "Resets" + day/time (e.g., "Resets Thu 9:00 AM")
+            for match in re.finditer(r'Resets\s+((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+\d{1,2}:\d{2}\s+[AP]M)', content, re.IGNORECASE):
+                all_resets.append((match.start(), 'at', match.group(1)))
+
+            # Sort by position in HTML to maintain correct order
+            all_resets.sort(key=lambda x: x[0])
+
+            # Extract just the type and time (remove position)
+            reset_times = [(reset_type, time) for _, reset_type, time in all_resets]
 
             # Close browser context safely
             try:
@@ -318,15 +340,41 @@ def extract_usage_auto(browser='firefox', headless=False, progress_callback=None
                 weekly_percent = int(percentages[1]) if len(percentages) > 1 else 0
                 opus_percent = int(percentages[2]) if len(percentages) > 2 else 0
 
-                current_reset = reset_times[0].strip() if len(reset_times) > 0 else ''
-                weekly_reset = reset_times[1].strip() if len(reset_times) > 1 else ''
-                opus_reset = reset_times[2].strip() if len(reset_times) > 2 else weekly_reset
+                # Extract reset times with their type ('in' or 'at')
+                # Strategy: First reset is always Current Session
+                # Find the first absolute time pattern ('at' type) for weekly limits
+                # Weekly limits (All Models and Opus) share the same reset time
+                current_reset_type, current_reset = reset_times[0] if len(reset_times) > 0 else ('in', '')
+
+                # Find first 'at' type for weekly reset (both All Models and Opus use this)
+                weekly_reset_type = 'at'
+                weekly_reset = ''
+                for reset_type, reset_time in reset_times[1:]:  # Skip first one (current session)
+                    if reset_type == 'at':
+                        weekly_reset_type = reset_type
+                        weekly_reset = reset_time
+                        break
+
+                # If no 'at' type found, fall back to second reset time
+                if not weekly_reset and len(reset_times) > 1:
+                    weekly_reset_type, weekly_reset = reset_times[1]
+
+                # Opus uses same reset as weekly
+                opus_reset_type = weekly_reset_type
+                opus_reset = weekly_reset
+
+                current_reset = current_reset.strip()
+                weekly_reset = weekly_reset.strip()
+                opus_reset = opus_reset.strip()
 
                 if not headless:
                     print(f"\n{GREEN}✓ Successfully extracted usage data:{RESET}")
-                    print(f"  Current Session: {current_percent}% (resets in {current_reset})")
-                    print(f"  Weekly (All Models): {weekly_percent}% (resets in {weekly_reset})")
-                    print(f"  Weekly (Opus): {opus_percent}% (resets in {opus_reset})")
+                    reset_in_or_at = "in" if current_reset_type == "in" else ""
+                    print(f"  Current Session: {current_percent}% (resets {reset_in_or_at} {current_reset})")
+                    reset_in_or_at = "in" if weekly_reset_type == "in" else ""
+                    print(f"  Weekly (All Models): {weekly_percent}% (resets {reset_in_or_at} {weekly_reset})")
+                    reset_in_or_at = "in" if opus_reset_type == "in" else ""
+                    print(f"  Weekly (Opus): {opus_percent}% (resets {reset_in_or_at} {opus_reset})")
 
                 # Detect plan (Pro is default for now)
                 plan = "Pro"  # Could be extracted from page as well
@@ -339,15 +387,18 @@ def extract_usage_auto(browser='firefox', headless=False, progress_callback=None
                     'extraction_method': 'automatic',
                     'current_session': {
                         'used_percent': current_percent,
-                        'reset_time': current_reset
+                        'reset_time': current_reset,
+                        'reset_type': current_reset_type
                     },
                     'weekly_all_models': {
                         'used_percent': weekly_percent,
-                        'reset_time': weekly_reset
+                        'reset_time': weekly_reset,
+                        'reset_type': weekly_reset_type
                     },
                     'weekly_opus': {
                         'used_percent': opus_percent,
-                        'reset_time': opus_reset
+                        'reset_time': opus_reset,
+                        'reset_type': opus_reset_type
                     }
                 }
 
@@ -432,6 +483,8 @@ def auto_refresh_mode(browser='firefox', interval=300):
         """Collect progress messages without displaying"""
         progress_messages.append(message)
 
+    first_run = True
+
     try:
         with Live(console=console, refresh_per_second=10) as live:
             while True:
@@ -439,6 +492,29 @@ def auto_refresh_mode(browser='firefox', interval=300):
                 display_content = display_usage()
                 display_content += f"\n{CYAN}─────────────────────────────────────────────────────────────────{RESET}\n"
                 display_content += f"{DIM}Auto-refresh: Enabled (every {interval // 60} minutes) | Press Ctrl+C to stop{RESET}\n"
+
+                # On first run, display cached data immediately then update
+                if first_run:
+                    first_run = False
+                    # Display cached data
+                    live.update(Text.from_ansi(display_content + f"\n{DIM}Updating usage...{RESET}"))
+
+                    # Clear progress messages
+                    progress_messages.clear()
+
+                    # Run immediate extraction
+                    try:
+                        success = extract_usage_auto(browser, headless=True, progress_callback=progress_callback)
+                    except KeyboardInterrupt:
+                        raise
+
+                    if not success:
+                        fail_msg = display_content + f"\n{YELLOW}Failed to update usage. Retrying in {interval // 60} minutes...{RESET}"
+                        live.update(Text.from_ansi(fail_msg))
+
+                    # Small pause before starting countdown
+                    time.sleep(2)
+                    continue
 
                 # Countdown loop
                 spinner_idx = 0
@@ -515,11 +591,14 @@ def display_usage():
         session = config['current_session']
         percent = session.get('used_percent', 0)
         reset_time = session.get('reset_time', 'Unknown')
+        reset_type = session.get('reset_type', 'in')  # Default to 'in' for backwards compatibility
 
         lines.append(f"{BOLD}Current Session:{RESET}")
         lines.append(f"  {create_progress_bar(percent)}")
-        if reset_time != 'Unknown':
-            lines.append(f"  {DIM}Resets in: {reset_time}{RESET}\n")
+        if reset_time != 'Unknown' and reset_time:
+            # Show "Resets in" for relative times, "Resets" for absolute times
+            reset_prefix = "Resets in" if reset_type == 'in' else "Resets"
+            lines.append(f"  {DIM}{reset_prefix} {reset_time}{RESET}\n")
         else:
             lines.append("")
 
@@ -528,11 +607,14 @@ def display_usage():
         weekly = config['weekly_all_models']
         percent = weekly.get('used_percent', 0)
         reset_time = weekly.get('reset_time', 'Unknown')
+        reset_type = weekly.get('reset_type', 'at')  # Default to 'at' for weekly limits
 
         lines.append(f"{BOLD}Weekly Limits (All Models):{RESET}")
         lines.append(f"  {create_progress_bar(percent)}")
-        if reset_time != 'Unknown':
-            lines.append(f"  {DIM}Resets in: {reset_time}{RESET}\n")
+        if reset_time != 'Unknown' and reset_time:
+            # Show "Resets in" for relative times, "Resets" for absolute times
+            reset_prefix = "Resets in" if reset_type == 'in' else "Resets"
+            lines.append(f"  {DIM}{reset_prefix} {reset_time}{RESET}\n")
         else:
             lines.append("")
 
@@ -541,11 +623,14 @@ def display_usage():
         opus = config['weekly_opus']
         percent = opus.get('used_percent', 0)
         reset_time = opus.get('reset_time', 'Unknown')
+        reset_type = opus.get('reset_type', 'at')  # Default to 'at' for weekly limits
 
         lines.append(f"{BOLD}Weekly Limits (Opus Only):{RESET}")
         lines.append(f"  {create_progress_bar(percent)}")
-        if reset_time != 'Unknown':
-            lines.append(f"  {DIM}Resets in: {reset_time}{RESET}\n")
+        if reset_time != 'Unknown' and reset_time:
+            # Show "Resets in" for relative times, "Resets" for absolute times
+            reset_prefix = "Resets in" if reset_type == 'in' else "Resets"
+            lines.append(f"  {DIM}{reset_prefix} {reset_time}{RESET}\n")
         else:
             lines.append("")
 
