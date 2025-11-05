@@ -376,8 +376,46 @@ def extract_usage_auto(browser='firefox', headless=False, progress_callback=None
                     reset_in_or_at = "in" if opus_reset_type == "in" else ""
                     print(f"  Weekly (Opus): {opus_percent}% (resets {reset_in_or_at} {opus_reset})")
 
-                # Detect plan (Pro is default for now)
-                plan = "Pro"  # Could be extracted from page as well
+                # Detect plan from page content
+                # The plan is stored in the data-org-plan attribute in the HTML
+                # Example: data-org-plan="enterprise" or data-org-plan="pro" or data-org-plan="free"
+                plan = None
+
+                # Primary pattern: Look for data-org-plan attribute
+                data_plan_match = re.search(r'data-org-plan=["\'](\w+)["\']', content, re.IGNORECASE)
+                if data_plan_match:
+                    plan_value = data_plan_match.group(1).lower()
+                    # Capitalize first letter for consistency
+                    plan = plan_value.capitalize()
+
+                # Fallback patterns if data-org-plan is not found
+                if not plan:
+                    plan_patterns = [
+                        # Look for plan name in other data attributes or JSON
+                        (r'["\'](?:plan|tier|subscription)["\']:\s*["\']enterprise["\']', 'Enterprise'),
+                        (r'["\'](?:plan|tier|subscription)["\']:\s*["\']pro["\']', 'Pro'),
+                        (r'["\'](?:plan|tier|subscription)["\']:\s*["\']free["\']', 'Free'),
+                    ]
+
+                    for pattern, plan_name in plan_patterns:
+                        if re.search(pattern, content, re.IGNORECASE):
+                            plan = plan_name
+                            break
+
+                # Fallback: preserve existing plan from config if detection fails
+                if not plan:
+                    existing_config = load_config()
+                    if existing_config and 'plan' in existing_config:
+                        plan = existing_config['plan']
+                        if not headless:
+                            print(f"  Plan: {plan} (preserved from config)")
+                    else:
+                        plan = "Pro"  # Default only if no config exists
+                        if not headless:
+                            print(f"  Plan: {plan} (default)")
+                else:
+                    if not headless:
+                        print(f"  Plan: {plan} (detected)")
 
                 # Build config
                 report_progress(f"→ Saving configuration...")

@@ -30,6 +30,11 @@ The tool tracks the three metrics exactly as shown on **claude.ai/settings/usage
 
 ## Quick Start
 
+> **📦 Upgrading?** If you already have claude-usage installed, just pull the latest changes and run:
+> ```bash
+> bash claude-usage-update.sh
+> ```
+
 ### Installation
 
 #### Method 1: Run the Installer (Recommended for Sharing)
@@ -63,16 +68,16 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### Updating Existing Installation
 
-If you already have claude-usage installed and want to update to the latest version:
+**Already installed?** Just pull the latest version and upgrade:
 
 ```bash
 # Navigate to your cloned repository
 cd claude-usage-monitor
 
-# Pull latest changes (if using git)
+# Pull latest changes
 git pull
 
-# Run the update script
+# Run the update script (installs dependencies and updates the binary)
 bash claude-usage-update.sh
 ```
 
@@ -198,8 +203,12 @@ These commands perform a one-time extraction with a visible browser window.
 1. Launches Firefox in headless mode with dedicated profile
 2. Navigates to claude.ai/settings/usage
 3. Extracts all three metrics automatically
-4. Saves data and displays your dashboard
-5. Your regular browsers are never touched!
+4. **Automatically detects your plan type** (Pro, Enterprise, or Free)
+5. Saves data and displays your dashboard
+6. Your regular browsers are never touched!
+
+**Plan Detection:**
+The tool automatically identifies your Claude subscription plan by parsing the `data-org-plan` attribute from the settings page HTML. This ensures your plan is always accurate without manual entry. If detection fails for any reason, the tool will preserve your existing plan from the config file.
 
 **Why Firefox with dedicated profile:**
 - ✓ Won't interfere with any of your browsers!
@@ -619,6 +628,9 @@ With Chrome: Yes, you need to close all Chrome windows first.
 
 **Q: How do I set up Firefox for the first time?**
 A: Just run `claude-usage setup-firefox` - it will open Firefox with the dedicated profile, you log in to Claude once, then close the browser. After that, simply run `claude-usage` anytime to auto-extract and display!
+
+**Q: How does the tool detect my plan (Pro/Enterprise/Free)?**
+A: In automatic mode, the tool parses the `data-org-plan` attribute directly from the claude.ai/settings/usage page. This ensures your plan is always correctly displayed without manual entry. If you use manual mode, you can enter your plan type directly. The plan is cached locally and will be preserved if automatic detection fails.
 
 **Q: Will this work on Windows?**
 A: It works on WSL (Windows Subsystem for Linux). Native Windows support could be added.
